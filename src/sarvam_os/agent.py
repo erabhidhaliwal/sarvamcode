@@ -324,35 +324,22 @@ class SarvamAgent:
         self.memory.add("user", user_input)
 
         try:
-            if stream:
-                response = self._client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    stream=True,
-                )
-
-                response_text = ""
-                console.print("\n[bold cyan]Sarvam:[/bold cyan] ", end="")
-
-                for chunk in response:
-                    if chunk.choices[0].delta.content:
-                        content = chunk.choices[0].delta.content
-                        console.print(content, end="")
-                        response_text += content
-
-                console.print()
-            else:
-                response = self._client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                )
-                response_text = response.choices[0].message.content or ""
+            # Always use non-streaming for reliability
+            response = self._client.chat.completions.create(
+                model=model,
+                messages=messages,
+            )
+            response_text = response.choices[0].message.content or ""
 
             self.memory.add("assistant", response_text)
 
             tool_call = self._parse_tool_call(response_text)
             if tool_call:
                 tool_name, params = tool_call
+                
+                # Show tool execution
+                console.print(f"\n[bold yellow]Executing:[/bold yellow] {tool_name}({params})")
+                
                 result = self._execute_tool(tool_name, params)
 
                 observation = f"[OBSERVATION]\n"
@@ -366,8 +353,10 @@ class SarvamAgent:
                 observation += "[/OBSERVATION]\n\n"
                 
                 if result.success:
+                    console.print(f"[bold green]✓ Success:[/bold green] {result.output[:200] if result.output else 'Done'}")
                     observation += "IMPORTANT: Verify this action succeeded by using read_file or list_files before telling the user it is done."
                 else:
+                    console.print(f"[bold red]✗ Failed:[/bold red] {result.error}")
                     observation += "The action FAILED. Report the exact error above. Do NOT claim success."
 
                 # Add observation as user message for the next turn
@@ -400,6 +389,10 @@ class SarvamAgent:
         tool_call = self._parse_tool_call(response_text)
         if tool_call:
             tool_name, params = tool_call
+            
+            # Show tool execution
+            console.print(f"\n[bold yellow]Executing:[/bold yellow] {tool_name}({params})")
+            
             result = self._execute_tool(tool_name, params)
 
             observation = f"[OBSERVATION]\n"
@@ -413,8 +406,10 @@ class SarvamAgent:
             observation += "[/OBSERVATION]\n\n"
             
             if result.success:
+                console.print(f"[bold green]✓ Success:[/bold green] {result.output[:200] if result.output else 'Done'}")
                 observation += "IMPORTANT: Verify this action succeeded by using read_file or list_files before telling the user it is done."
             else:
+                console.print(f"[bold red]✗ Failed:[/bold red] {result.error}")
                 observation += "The action FAILED. Report the exact error above. Do NOT claim success."
 
             self.memory.add("user", observation)

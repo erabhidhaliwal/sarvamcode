@@ -167,6 +167,8 @@ class SarvamCLI:
 
         try:
             response = self.agent.chat(user_input, stream=self.stream)
+            if response:
+                console.print(f"\n[bold yellow]Sarvam:[/bold yellow] {response}")
         except Exception as e:
             console.print(f"\n[red]Error: {e}[/red]")
 
