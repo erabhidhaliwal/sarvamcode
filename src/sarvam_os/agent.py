@@ -31,49 +31,78 @@ from src.sarvam_os.tools import (
 
 console = Console()
 
-SYSTEM_PROMPT = """You are Sarvam-OS, an autonomous AI coding agent that operates as a co-developer on the user's local machine.
+SYSTEM_PROMPT = """You are Sarvam-OS, an AI coding agent. You are NOT a human. You are a tool-executing agent.
 
-## Your Identity
-You are a persistent agent with memory across sessions. You can read, write, and execute commands on the user's behalf.
+## CRITICAL RULES - NEVER VIOLATE
+1. NEVER claim to have done something unless you have [OBSERVATION] output confirming success
+2. NEVER make up file contents, command outputs, or results
+3. NEVER say "I have created", "I have modified", "I have executed" without actual tool confirmation
+4. If a tool fails, report the EXACT error from the [OBSERVATION]
+5. Always VERIFY your actions by reading files back or checking outputs
+6. Current date/time: {current_datetime}
 
 ## Response Format
-You MUST follow this Thought-Action-Observation loop:
-
-[PLAN]
-1. Analyze the task
-2. Break it into steps
-3. Identify required tools
-[/PLAN]
+Follow this EXACT format:
 
 [THOUGHT]
-Your internal reasoning about the current step...
+What I need to do and which tool to use...
 [/THOUGHT]
 
 [ACTION]
-tool_name(file_path="path/to/file")
+tool_name(param="value")
 [/ACTION]
 
-After each action, you will receive an [OBSERVATION] with the result. Use this to inform your next step.
+STOP. Wait for [OBSERVATION] before continuing.
+
+After receiving [OBSERVATION]:
+- If success=true: Report exactly what the observation shows
+- If success=false: Report the exact error and try to fix it
 
 ## Available Tools
 {tools}
 
-## Autonomous Error Correction
-When a command fails:
-1. Analyze the error in [THOUGHT]
-2. Attempt a fix automatically
-3. Retry up to 3 times before asking the user
-4. Always explain what went wrong and how you fixed it
+## Tool Usage Rules
+1. edit_file: Use mode="overwrite" for new files, mode="search_replace" for modifications
+2. execute_command: Returns stdout/stderr - READ THE OUTPUT before claiming success
+3. read_file: Always use to verify file contents after creating/modifying
+4. After ANY file edit, run read_file to confirm the change was applied
 
-## Best Practices
-1. Always scan the codebase before making changes
-2. Use search_replace mode for targeted edits
-3. Run tests after code changes
-4. Commit meaningful changes with clear messages
-5. Preserve existing code style and conventions
-6. Never delete files without explicit permission
+## Example Correct Flow
+[THOUGHT] I need to create a file test.py
+[/THOUGHT]
 
-Be helpful, proactive, and thorough. You are not just a chatbot - you are a capable developer assistant."""
+[ACTION]
+edit_file(file_path="test.py", content="print('hello')", mode="overwrite")
+[/ACTION]
+
+[OBSERVATION]
+Success: True
+Output: File written: test.py
+[/OBSERVATION]
+
+[THOUGHT] The file was created. Let me verify by reading it.
+[/THOUGHT]
+
+[ACTION]
+read_file(file_path="test.py")
+[/ACTION]
+
+[OBSERVATION]
+Success: True
+Output: print('hello')
+[/OBSERVATION]
+
+The file test.py has been created and verified. It contains: print('hello')
+
+## Example Error Handling
+[OBSERVATION]
+Success: False
+Error: File not found
+[/OBSERVATION]
+
+Report: "The operation failed with error: File not found. I need to create the file first."
+
+NEVER fabricate success. ONLY report what observations show."""
 
 
 class SarvamAgent:
@@ -105,11 +134,19 @@ class SarvamAgent:
     def _get_model(self) -> str:
         return os.environ.get("SARVAM_MODEL", "sarvam-m")
 
+    def _get_datetime(self) -> str:
+        from datetime import datetime
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S %Z")
+
     def _build_messages(self, user_input: str) -> list[dict[str, str]]:
+        current_dt = self._get_datetime()
         messages = [
             {
                 "role": "system",
-                "content": SYSTEM_PROMPT.format(tools=get_tools_description()),
+                "content": SYSTEM_PROMPT.format(
+                    tools=get_tools_description(),
+                    current_datetime=current_dt
+                ),
             }
         ]
 
@@ -135,10 +172,14 @@ class SarvamAgent:
 
     def _build_messages_from_history(self) -> list[dict[str, str]]:
         """Build messages from memory history without adding new user input."""
+        current_dt = self._get_datetime()
         messages = [
             {
                 "role": "system",
-                "content": SYSTEM_PROMPT.format(tools=get_tools_description()),
+                "content": SYSTEM_PROMPT.format(
+                    tools=get_tools_description(),
+                    current_datetime=current_dt
+                ),
             }
         ]
 
@@ -168,15 +209,90 @@ class SarvamAgent:
 
             params = {}
             
-            # Parse key="value" or key=value format
-            # Pattern matches: key="value", key='value', key=value
-            pattern = r'(\w+)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^,\s]*))'
-            for match in re.finditer(pattern, params_str):
-                key = match.group(1)
-                # Get the first non-None value from groups 2, 3, 4
-                value = match.group(2) or match.group(3) or match.group(4)
-                if value is not None:
-                    params[key] = value
+            # More robust parsing that handles multi-line content
+            # Match key= followed by either "value" or 'value' or unquoted value
+            # Use a state machine approach for better quote handling
+            i = 0
+            while i < len(params_str):
+                # Skip whitespace
+                while i < len(params_str) and params_str[i] in ' \t\n':
+                    i += 1
+                if i >= len(params_str):
+                    break
+                    
+                # Find key
+                key_start = i
+                while i < len(params_str) and params_str[i] not in '=, \t\n':
+                    i += 1
+                key = params_str[key_start:i].strip()
+                
+                if not key:
+                    i += 1
+                    continue
+                    
+                # Skip to =
+                while i < len(params_str) and params_str[i] in ' \t\n':
+                    i += 1
+                if i >= len(params_str) or params_str[i] != '=':
+                    i += 1
+                    continue
+                i += 1  # Skip =
+                
+                # Skip whitespace after =
+                while i < len(params_str) and params_str[i] in ' \t\n':
+                    i += 1
+                    
+                if i >= len(params_str):
+                    break
+                    
+                # Parse value
+                if params_str[i] == '"':
+                    # Double quoted string
+                    i += 1
+                    value_start = i
+                    value_chars = []
+                    while i < len(params_str):
+                        if params_str[i] == '\\' and i + 1 < len(params_str):
+                            # Handle escape sequences
+                            next_char = params_str[i + 1]
+                            if next_char == 'n':
+                                value_chars.append('\n')
+                            elif next_char == 't':
+                                value_chars.append('\t')
+                            elif next_char == '"':
+                                value_chars.append('"')
+                            elif next_char == '\\':
+                                value_chars.append('\\')
+                            else:
+                                value_chars.append(next_char)
+                            i += 2
+                        elif params_str[i] == '"':
+                            break
+                        else:
+                            value_chars.append(params_str[i])
+                            i += 1
+                    params[key] = ''.join(value_chars)
+                    i += 1  # Skip closing quote
+                elif params_str[i] == "'":
+                    # Single quoted string
+                    i += 1
+                    value_start = i
+                    while i < len(params_str) and params_str[i] != "'":
+                        i += 1
+                    params[key] = params_str[value_start:i]
+                    i += 1
+                else:
+                    # Unquoted value (until comma or end)
+                    value_start = i
+                    while i < len(params_str) and params_str[i] not in ',\n':
+                        i += 1
+                    params[key] = params_str[value_start:i].strip()
+                
+                # Skip comma if present
+                while i < len(params_str) and params_str[i] in ' \t\n':
+                    i += 1
+                if i < len(params_str) and params_str[i] == ',':
+                    i += 1
 
             return tool_name, params
 
@@ -232,12 +348,20 @@ class SarvamAgent:
                 tool_name, params = tool_call
                 result = self._execute_tool(tool_name, params)
 
-                observation = f"[OBSERVATION]\nSuccess: {result.success}\n"
+                observation = f"[OBSERVATION]\n"
+                observation += f"Tool: {tool_name}\n"
+                observation += f"Parameters: {params}\n"
+                observation += f"Success: {result.success}\n"
                 if result.output:
-                    observation += f"Output:\n{result.output[:2000]}\n"
+                    observation += f"--- OUTPUT START ---\n{result.output}\n--- OUTPUT END ---\n"
                 if result.error:
-                    observation += f"Error: {result.error}\n"
-                observation += "[/OBSERVATION]\n\nNow respond to the user based on this observation."
+                    observation += f"--- ERROR START ---\n{result.error}\n--- ERROR END ---\n"
+                observation += "[/OBSERVATION]\n\n"
+                
+                if result.success:
+                    observation += "IMPORTANT: Verify this action succeeded by using read_file or list_files before telling the user it is done."
+                else:
+                    observation += "The action FAILED. Report the exact error above. Do NOT claim success."
 
                 # Add observation as user message for the next turn
                 self.memory.add("user", observation)
@@ -271,12 +395,20 @@ class SarvamAgent:
             tool_name, params = tool_call
             result = self._execute_tool(tool_name, params)
 
-            observation = f"[OBSERVATION]\nSuccess: {result.success}\n"
+            observation = f"[OBSERVATION]\n"
+            observation += f"Tool: {tool_name}\n"
+            observation += f"Parameters: {params}\n"
+            observation += f"Success: {result.success}\n"
             if result.output:
-                observation += f"Output:\n{result.output[:2000]}\n"
+                observation += f"--- OUTPUT START ---\n{result.output}\n--- OUTPUT END ---\n"
             if result.error:
-                observation += f"Error: {result.error}\n"
-            observation += "[/OBSERVATION]\n\nNow respond to the user based on this observation."
+                observation += f"--- ERROR START ---\n{result.error}\n--- ERROR END ---\n"
+            observation += "[/OBSERVATION]\n\n"
+            
+            if result.success:
+                observation += "IMPORTANT: Verify this action succeeded by using read_file or list_files before telling the user it is done."
+            else:
+                observation += "The action FAILED. Report the exact error above. Do NOT claim success."
 
             self.memory.add("user", observation)
             messages = self._build_messages_from_history()
