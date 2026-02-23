@@ -1,5 +1,5 @@
 [project]
-name = "sarvam-flow"
+name = "sarvam"
 version = "0.1.0"
 description = "A local AI coding agent CLI powered by Sarvam-M"
 requires-python = ">=3.9"
@@ -17,7 +17,7 @@ dev = [
 ]
 
 [project.scripts]
-sarvam-flow = "main:app"
+sarvam = "src.cli:app"
 
 [build-system]
 requires = ["hatchling"]
