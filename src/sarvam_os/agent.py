@@ -133,6 +133,30 @@ class SarvamAgent:
 
         return messages
 
+    def _build_messages_from_history(self) -> list[dict[str, str]]:
+        """Build messages from memory history without adding new user input."""
+        messages = [
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT.format(tools=get_tools_description()),
+            }
+        ]
+
+        history = self.memory.get_context_window(max_tokens=6000)
+        
+        # Filter and ensure proper alternation
+        last_role = "system"
+        for msg in history:
+            role = msg["role"]
+            if role == "system":
+                continue
+            if role == last_role:
+                continue
+            messages.append(msg)
+            last_role = role
+
+        return messages
+
     def _parse_tool_call(self, text: str) -> Optional[tuple[str, dict[str, Any]]]:
         action_match = re.search(r"\[ACTION\]\s*(\w+)\s*\((.*?)\)\s*\[/ACTION\]", text, re.DOTALL)
         if action_match:
@@ -142,38 +166,19 @@ class SarvamAgent:
             if not params_str:
                 return tool_name, {}
 
-            try:
-                params = json.loads(params_str)
-                return tool_name, params
-            except json.JSONDecodeError:
-                params = {}
-                in_string = False
-                current_key = ""
-                current_value = ""
-                buffer = ""
-                
-                for char in params_str:
-                    if char == '"' and (not buffer or buffer[-1] != '\\'):
-                        in_string = not in_string
-                        buffer += char
-                    elif char == ':' and not in_string:
-                        current_key = buffer.strip().strip('"')
-                        buffer = ""
-                    elif char == ',' and not in_string:
-                        current_value = buffer.strip().strip('"')
-                        if current_key:
-                            params[current_key] = current_value
-                        current_key = ""
-                        current_value = ""
-                        buffer = ""
-                    else:
-                        buffer += char
-                
-                if current_key and buffer:
-                    current_value = buffer.strip().strip('"')
-                    params[current_key] = current_value
+            params = {}
+            
+            # Parse key="value" or key=value format
+            # Pattern matches: key="value", key='value', key=value
+            pattern = r'(\w+)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^,\s]*))'
+            for match in re.finditer(pattern, params_str):
+                key = match.group(1)
+                # Get the first non-None value from groups 2, 3, 4
+                value = match.group(2) or match.group(3) or match.group(4)
+                if value is not None:
+                    params[key] = value
 
-                return tool_name, params
+            return tool_name, params
 
         return None
 
@@ -227,29 +232,57 @@ class SarvamAgent:
                 tool_name, params = tool_call
                 result = self._execute_tool(tool_name, params)
 
-                observation = f"\n[OBSERVATION]\nSuccess: {result.success}\n"
+                observation = f"[OBSERVATION]\nSuccess: {result.success}\n"
                 if result.output:
-                    observation += f"Output: {result.output[:1000]}\n"
+                    observation += f"Output:\n{result.output[:2000]}\n"
                 if result.error:
                     observation += f"Error: {result.error}\n"
-                observation += "[/OBSERVATION]"
+                observation += "[/OBSERVATION]\n\nNow respond to the user based on this observation."
 
-                if not result.success and self._retry_count < self.max_retries:
-                    self._retry_count += 1
-                    observation += f"\n[RETRY {self._retry_count}/{self.max_retries}]"
-                    # Add as assistant message to maintain alternation
-                    self.memory.add("assistant", observation, metadata={"observation": True})
-                    return self.chat("Continue with the fix", stream=stream)
-                else:
-                    self._retry_count = 0
-                    self.memory.add("assistant", observation, metadata={"observation": True})
+                # Add observation as user message for the next turn
+                self.memory.add("user", observation)
+                
+                # Build messages for continuation
+                messages = self._build_messages_from_history()
+                
+                # Continue the conversation (recursive to handle multiple tool calls)
+                return self._continue_with_observation(model, messages)
 
             return response_text
 
         except Exception as e:
             error_msg = f"Error: {str(e)}"
-            # Don't add to memory - just return the error
             return error_msg
+
+    def _continue_with_observation(self, model: str, messages: list[dict[str, str]], max_loops: int = 5) -> str:
+        """Continue conversation after tool execution, handling multiple tool calls."""
+        if max_loops <= 0:
+            return "Maximum tool calls reached"
+
+        response = self._client.chat.completions.create(
+            model=model,
+            messages=messages,
+        )
+        response_text = response.choices[0].message.content or ""
+        self.memory.add("assistant", response_text)
+
+        tool_call = self._parse_tool_call(response_text)
+        if tool_call:
+            tool_name, params = tool_call
+            result = self._execute_tool(tool_name, params)
+
+            observation = f"[OBSERVATION]\nSuccess: {result.success}\n"
+            if result.output:
+                observation += f"Output:\n{result.output[:2000]}\n"
+            if result.error:
+                observation += f"Error: {result.error}\n"
+            observation += "[/OBSERVATION]\n\nNow respond to the user based on this observation."
+
+            self.memory.add("user", observation)
+            messages = self._build_messages_from_history()
+            return self._continue_with_observation(model, messages, max_loops - 1)
+
+        return response_text
 
     def clear_memory(self) -> None:
         self.memory.clear()

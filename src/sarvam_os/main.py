@@ -180,9 +180,12 @@ class SarvamCLI:
             try:
                 if self.session is None:
                     break
-                user_input = self.session.prompt(
-                    HTML("<ansigreen><b>You:</b></ansigreen> "),
-                )
+                try:
+                    user_input = self.session.prompt(
+                        HTML("<ansigreen><b>You:</b></ansigreen> "),
+                    )
+                except Exception:
+                    user_input = input("You: ")
 
                 user_input = user_input.strip()
 
