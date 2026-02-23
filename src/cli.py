@@ -15,7 +15,13 @@ from rich.syntax import Syntax
 from rich.text import Text
 
 from src.agent import Agent, ProjectMapper
-from src.utils import FileParser, confirm_action, execute_shell_command, write_file
+from src.utils import (
+    FileParser,
+    confirm_action,
+    execute_shell_command,
+    git_commit_and_push,
+    write_file,
+)
 
 app = typer.Typer(
     name="sarvam-flow",
@@ -66,6 +72,14 @@ def run(
             help="Parse and display actions without executing",
         ),
     ] = False,
+    auto_git: Annotated[
+        bool,
+        typer.Option(
+            "--auto-git",
+            "-g",
+            help="Auto-commit and push changes to git",
+        ),
+    ] = False,
 ) -> None:
     _run_agent(
         prompt=prompt,
@@ -73,6 +87,7 @@ def run(
         include_files=include_files,
         auto_approve=auto_approve,
         dry_run=dry_run,
+        auto_git=auto_git,
     )
 
 
@@ -121,6 +136,7 @@ def _run_agent(
     include_files: bool,
     auto_approve: bool,
     dry_run: bool,
+    auto_git: bool = False,
 ) -> None:
     project_path = project_path.resolve()
     history_file = project_path / ".conversation_history.json"
@@ -161,6 +177,8 @@ def _run_agent(
         console.print("\n[yellow]Dry run mode - no actions executed[/yellow]")
         return
 
+    files_written = []
+
     for action in actions:
         if action.action_type == "file_write":
             if auto_approve or confirm_action(action, console):
@@ -170,6 +188,7 @@ def _run_agent(
                     root_path=project_path,
                     console=console,
                 )
+                files_written.append(action.file_path)
 
         elif action.action_type == "shell_cmd":
             if auto_approve or confirm_action(action, console):
@@ -178,6 +197,13 @@ def _run_agent(
                     cwd=project_path,
                     console=console,
                 )
+
+    if auto_git and files_written:
+        git_commit_and_push(
+            message=f"Sarvam-Flow: {prompt[:50]}",
+            project_path=project_path,
+            console=console,
+        )
 
 
 @app.command()

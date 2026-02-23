@@ -4,6 +4,7 @@ Utility functions for file parsing and shell execution.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -202,3 +203,54 @@ def confirm_action(action: ParsedAction, console: Optional[Console] = None) -> b
         ).lower() in ("y", "yes", "")
 
     return True
+
+
+def git_commit_and_push(
+    message: str,
+    project_path: Optional[Union[Path, str]] = None,
+    console: Optional[Console] = None,
+) -> bool:
+    console = console or Console()
+    project_path = Path(project_path) if project_path else Path.cwd()
+
+    try:
+        subprocess.run(
+            ["git", "add", "-A"],
+            cwd=project_path,
+            capture_output=True,
+            check=True,
+        )
+
+        result = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=project_path,
+            capture_output=True,
+        )
+
+        if result.returncode == 0:
+            return True
+
+        subprocess.run(
+            ["git", "commit", "-m", message],
+            cwd=project_path,
+            capture_output=True,
+            check=True,
+        )
+
+        subprocess.run(
+            ["git", "push"],
+            cwd=project_path,
+            capture_output=True,
+            check=True,
+        )
+
+        console.print("[green]✓ Changes committed and pushed to git[/green]")
+        return True
+
+    except subprocess.CalledProcessError as e:
+        err_msg = e.stderr.decode() if e.stderr else str(e)
+        console.print(f"[yellow]Git operation skipped: {err_msg}[/yellow]")
+        return False
+    except FileNotFoundError:
+        console.print("[yellow]Git not found - skipping commit[/yellow]")
+        return False
