@@ -54,9 +54,16 @@ tool_name(param="value")
 
 STOP. Wait for [OBSERVATION] before continuing.
 
-After receiving [OBSERVATION]:
-- If success=true: Report exactly what the observation shows
-- If success=false: Report the exact error and try to fix it
+## Multi-File Tasks - IMPORTANT
+When asked to create MULTIPLE files, you must:
+1. Create ONE file at a time
+2. Wait for [OBSERVATION] confirming success
+3. Then create the NEXT file
+4. Repeat until ALL files are created
+5. ONLY report completion after ALL files are verified
+
+Example for creating 3 files:
+- Create file 1 -> Wait for observation -> Create file 2 -> Wait for observation -> Create file 3 -> Wait for observation -> Then report completion
 
 ## Available Tools
 {tools}
@@ -378,10 +385,10 @@ class SarvamAgent:
             error_msg = f"Error: {str(e)}"
             return error_msg
 
-    def _continue_with_observation(self, model: str, messages: list[dict[str, str]], max_loops: int = 5) -> str:
+    def _continue_with_observation(self, model: str, messages: list[dict[str, str]], max_loops: int = 15) -> str:
         """Continue conversation after tool execution, handling multiple tool calls."""
         if max_loops <= 0:
-            return "Maximum tool calls reached"
+            return "Maximum tool calls reached. Task may not be complete."
 
         response = self._client.chat.completions.create(
             model=model,
