@@ -50,7 +50,7 @@ Your internal reasoning about the current step...
 [/THOUGHT]
 
 [ACTION]
-tool_name({"param": "value"})
+tool_name(file_path="path/to/file")
 [/ACTION]
 
 After each action, you will receive an [OBSERVATION] with the result. Use this to inform your next step.
@@ -113,9 +113,22 @@ class SarvamAgent:
             }
         ]
 
-        for msg in self.memory.get_context_window(max_tokens=6000):
+        history = self.memory.get_context_window(max_tokens=6000)
+        
+        # Filter and ensure proper alternation
+        last_role = "system"
+        for msg in history:
+            role = msg["role"]
+            # Skip system messages in history (they're for observations only)
+            if role == "system":
+                continue
+            # Ensure alternation
+            if role == last_role:
+                continue
             messages.append(msg)
+            last_role = role
 
+        # Always add user message at the end
         messages.append({"role": "user", "content": user_input})
 
         return messages
@@ -126,19 +139,40 @@ class SarvamAgent:
             tool_name = action_match.group(1)
             params_str = action_match.group(2).strip()
 
+            if not params_str:
+                return tool_name, {}
+
             try:
-                if params_str:
-                    params = json.loads(params_str)
-                else:
-                    params = {}
+                params = json.loads(params_str)
                 return tool_name, params
             except json.JSONDecodeError:
                 params = {}
-                if params_str:
-                    for part in params_str.split(","):
-                        if ":" in part:
-                            key, value = part.split(":", 1)
-                            params[key.strip().strip('"')] = value.strip().strip('"')
+                in_string = False
+                current_key = ""
+                current_value = ""
+                buffer = ""
+                
+                for char in params_str:
+                    if char == '"' and (not buffer or buffer[-1] != '\\'):
+                        in_string = not in_string
+                        buffer += char
+                    elif char == ':' and not in_string:
+                        current_key = buffer.strip().strip('"')
+                        buffer = ""
+                    elif char == ',' and not in_string:
+                        current_value = buffer.strip().strip('"')
+                        if current_key:
+                            params[current_key] = current_value
+                        current_key = ""
+                        current_value = ""
+                        buffer = ""
+                    else:
+                        buffer += char
+                
+                if current_key and buffer:
+                    current_value = buffer.strip().strip('"')
+                    params[current_key] = current_value
+
                 return tool_name, params
 
         return None
@@ -155,10 +189,11 @@ class SarvamAgent:
         return tool_func(self.deps, **params)
 
     def chat(self, user_input: str, stream: bool = True) -> str:
-        self.memory.add("user", user_input)
-
         messages = self._build_messages(user_input)
         model = self._get_model()
+
+        # Add user message to memory AFTER building messages
+        self.memory.add("user", user_input)
 
         try:
             if stream:
@@ -202,19 +237,18 @@ class SarvamAgent:
                 if not result.success and self._retry_count < self.max_retries:
                     self._retry_count += 1
                     observation += f"\n[RETRY {self._retry_count}/{self.max_retries}]"
+                    # Add as assistant message to maintain alternation
+                    self.memory.add("assistant", observation, metadata={"observation": True})
+                    return self.chat("Continue with the fix", stream=stream)
                 else:
                     self._retry_count = 0
-
-                self.memory.add("system", observation, metadata={"observation": True})
-
-                if not result.success and self._retry_count > 0:
-                    return self.chat("Continue with the fix", stream=stream)
+                    self.memory.add("assistant", observation, metadata={"observation": True})
 
             return response_text
 
         except Exception as e:
             error_msg = f"Error: {str(e)}"
-            self.memory.add("system", error_msg, metadata={"error": True})
+            # Don't add to memory - just return the error
             return error_msg
 
     def clear_memory(self) -> None:

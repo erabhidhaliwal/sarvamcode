@@ -1,0 +1,14 @@
+[
+  {
+    "role": "user",
+    "content": "hello",
+    "timestamp": "2026-02-23T13:34:10.495462",
+    "metadata": {}
+  },
+  {
+    "role": "assistant",
+    "content": " [PLAN]\n1. Greet the user and confirm readiness to assist\n2. Offer help with their development tasks\n[/PLAN]\n\n[THOUGHT]\nThe user has initiated a new session. I should greet them and let them know I'm ready to help with their coding tasks. I'll keep the response friendly and professional.\n[/THOUGHT]\n\nHello! I'm Sarvam-OS, your AI coding assistant. How can I help you today? Whether it's writing code, debugging, or managing your project, I'm here to assist.",
+    "timestamp": "2026-02-23T13:34:12.765890",
+    "metadata": {}
+  }
+]

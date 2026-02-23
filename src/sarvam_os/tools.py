@@ -365,4 +365,4 @@ def get_tools_description() -> str:
             for p, d in tool["parameters"].items()
         )
         descriptions.append(f"- {name}({params}): {tool['description']}")
-    return "\n".join(descriptions)
+    return "\n".join(descriptions).replace("{", "{{").replace("}", "}}")
